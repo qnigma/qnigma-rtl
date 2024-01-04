@@ -1,0 +1,1 @@
+localparam REFCLK_HZ = 12500;

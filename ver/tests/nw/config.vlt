@@ -1,0 +1,10 @@
+`verilator_config
+public -module "qnigma" -var "*"
+public -module "wrap" -var "*"
+public -module "qnigma_core" -var "*"
+public -module "qnigma_icmp" -var "*"
+public -module "qnigma_rtr_inf" -var "*"
+public -module "qnigma_tx" -var "*"
+public -module "qnigma_rx" -var "*"
+public -module "top" -var "*"
+public -module "tb" -var "*"

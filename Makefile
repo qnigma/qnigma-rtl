@@ -134,6 +134,15 @@ tb-mdio :
 		$(DOCKER_RUN) ./obj_dir/Vtop
 		@echo "-- Complete --"
 
+# MDIO
+tb-uart :
+		@echo "-- Building testbench [UART] --"
+		$(DOCKER_RUN) $(VERILATOR) $(VERILATOR_ARGS) $(SRC) ver/tests/uart/top.sv ver/tests/uart/wrap.sv ver/tests/uart/top.cpp ver/tests/uart/config.vlt
+		@echo "-- Running testbench [UART] --"
+		$(DOCKER_RUN) chmod +x obj_dir/Vtop 
+		$(DOCKER_RUN) ./obj_dir/Vtop
+		@echo "-- Complete --"
+
 all : tb-alu tb-chacha20 tb-chacha20-kst tb-kex tb-poly1305 tb-nw
 
 clean:

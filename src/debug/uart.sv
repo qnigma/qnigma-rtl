@@ -1,61 +1,53 @@
 module uart #
 (                            
-    parameter DATA_WIDTH      = 8,
-    parameter STOP_BITS       = 1,
-    parameter PARITY          = 0,
-    parameter EVEN            = 1,
-    parameter PRESCALER       = 217,
-    parameter LATCH_TOLERANCE = 30
+  parameter int   DATA_BITS = 8,
+  parameter int   STOP_BITS = 1,
+  parameter [1:0] PARITY_MODE  = 0, // 0: None, 1: Even, 2: Odd
+  parameter int   BAUD_RATE = 115200,
+  parameter int   CLK_FREQ  = 125000000
 )
 (
-    input  wire       clk_rx,
-    input  wire       clk_tx,
-    input  wire       rst,
+    input  logic       clk,
+    input  logic       rst,
 
-	input  wire       rx,
-	output wire       tx,
+	input  logic       rx,
+	output logic       tx,
 
-	input  wire [7:0] txd,
-	input  wire       txv,
+	input  logic [7:0] txd,
+	input  logic       txv,
+	output logic       cts,
 	
-	output wire [7:0] rxd,
-	output wire       rxv,
-	
-	output wire       rdy,
-	output wire       tx_active
-
+	output logic [7:0] rxd,
+	output logic       rxv
 );
-
-assign rdy = ( ~tx_active && ~txv );
-
-uart_rx #(
-	.DATA_WIDTH      ( DATA_WIDTH  ),
-	.STOP_BITS       ( STOP_BITS   ),
-	.PARITY          ( PARITY      ),
-	.EVEN            ( EVEN        ),
-	.PRESCALER       ( PRESCALER   ),
-	.LATCH_TOLERANCE ( LATCH_TOLERANCE ) )
-uart_rx_inst (
-	.clk      ( clk_rx ),
-	.rst      ( rst ),
-	.rx       ( rx  ),
-	.rxd      ( rxd ),
-	.rxv      ( rxv )
-);
-
-uart_tx #(
-	.DATA_WIDTH ( DATA_WIDTH  ),
-	.STOP_BITS  ( STOP_BITS   ),
-	.PARITY     ( PARITY      ),
-	.EVEN       ( EVEN        ),
-	.PRESCALER  ( PRESCALER   ) )
-uart_tx_inst (
-	.clk      ( clk_tx ),
-	.rst      ( rst ),
-	.tx       ( tx  ),
-	.txd      ( txd ),
-	.txv      ( txv ),
-	.active   ( tx_active )
-);
+  
+  uart_rx #(
+    .DATA_BITS (DATA_BITS),
+    .STOP_BITS (STOP_BITS),
+    .PARITY_MODE    (PARITY_MODE   ),
+    .BAUD_RATE (BAUD_RATE),
+    .CLK_FREQ  (CLK_FREQ )
+  ) uart_rx_inst (
+    .clk (clk),
+    .rst (rst),
+    .rx  (rx ),
+    .dat (rxd),
+    .val (rxv)
+  );
+  
+  uart_tx #(
+    .DATA_BITS   (DATA_BITS),
+    .STOP_BITS   (STOP_BITS),
+    .PARITY_MODE (PARITY_MODE   ), // 0: None, 1: Even, 2: Odd
+    .BAUD_RATE   (BAUD_RATE),
+    .CLK_FREQ    (CLK_FREQ )
+  ) uart_tx_inst (
+    .clk  (clk),
+    .rst  (rst),
+    .tx   (tx ),
+    .dat  (txd),
+    .val  (txv),
+    .cts  (cts) 
+  );
 
 endmodule

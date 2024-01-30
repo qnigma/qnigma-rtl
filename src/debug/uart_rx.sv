@@ -1,156 +1,87 @@
-
-module uart_rx #
-(
-    parameter DATA_WIDTH = 8,      // actual data length 
-    parameter STOP_BITS  = 1,      // number of stop bits ( can be any number )
-    parameter PARITY     = 1,      // enable parity?
-    parameter EVEN       = 1,      // '1' for even, '0' for odd
-    parameter PRESCALER  = 15,     // prescaler. symbol frequency is calculated as clk/PRESCALER. can be any number >=4
-    parameter LATCH_TOLERANCE = 1  // set +/- tolerance where line transitions are acceptable (measured in clk ticks)
-)
-(
-    input wire clk,
-    input wire rst,
-	input wire rx,
-	
-	output reg [DATA_WIDTH-1:0] rxd,
-	output reg                  rxv
+module uart_rx #(
+  parameter int   DATA_BITS = 8,
+  parameter int   STOP_BITS = 1,
+  parameter [1:0] PARITY_MODE  = 0, // 0: None, 1: Even, 2: Odd
+  parameter int   BAUD_RATE = 115200,
+  parameter int   CLK_FREQ  = 50000000
+) (
+  input  logic       clk,
+  input  logic       rst,
+  input  logic       rx,
+  output logic [7:0] dat,
+  output logic       val
 );
 
-parameter WIDTH = DATA_WIDTH+STOP_BITS+PARITY;
+  // Calculate the number of clock cycles per bit based on the baud rate and clock frequency
+  localparam int BAUD_TICKS = CLK_FREQ / BAUD_RATE;
+  localparam int SAMPLE_POINT = BAUD_TICKS / 2; // Mid-point for sampling
 
-reg [$clog2(PRESCALER)-1:0] psk_ctr;
+  // State Machine States
+  typedef enum {
+    IDLE,
+    START,
+    DATA,
+    PARITY,
+    STOP
+  } state_t;
 
-reg           rx_prev; 
-reg           active;   // rx active signal
-reg           rx_val;   // when high, RX level change is expected
-reg [WIDTH:0] shiftreg; // the shift register where incoming data is loaded, including parity and stop bits
-reg [7:0]     bit_ctr;
-reg           start;     // 1 clock tick long signal corresponding to a start condition
-reg           rx_sync;  // syncronyzed rx signal ( this is actually used ) ,
-reg           parity_en;
-reg           parity_bit;
+  state_t state;
 
-// input synchronyzer
+  // Internal Variables
+  logic [31:0] ctr; // Counts the cycles to determine when to sample
+  logic [5:0] bit_ctr; // Counts the received bits
+  logic [DATA_BITS-1:0] shift_reg; // Temporary storage for received bits
+  logic par; // Calculated parity bit
 
-reg rx_sync1;
-always @ (posedge clk) begin
-	rx_sync1 <= rx;
-	rx_sync  <= rx_sync1;
-end
-
-// previous rx line state
-always @ (posedge clk) begin
-	if (rst) rx_prev <= 0;
-	else rx_prev <= rx_sync;
-end
-
-// latch data into shift reg
-always @ (posedge clk) begin
-	if (rst) begin 
-		bit_ctr  <= 0;
-		shiftreg <= 0;
-	end
-	else begin 
-		if (active && (psk_ctr == LATCH_TOLERANCE)) begin // latch data when rx node should be stable
-			shiftreg [WIDTH:0] <= {rx_sync, shiftreg[WIDTH:1]};
-			bit_ctr <= bit_ctr + 1; // increment bit counter every write to shiftreg
-		end
-		if (!active) begin 
-			bit_ctr  <= 0; // if by some reason active state is deasserted (end or error), reset the bit counter
-			shiftreg <= 0;
-		end
-	end
-end
-
-// generate rx_val to set limits on where rx state transactions may occur
-always @ (posedge clk) begin
-	if (rst) begin 
-		rx_val <= 1'b0;
-	end
-	else if (( psk_ctr == PRESCALER-LATCH_TOLERANCE-1)) begin // tolerance left of expected transaction time
-		rx_val <= 1'b1;
-	end
-	else if   (psk_ctr == LATCH_TOLERANCE) begin // tolerance right of expected transaction time
-		rx_val <= 1'b0;
-	end
-end
-
-// parity is calculated for data only
-
-always @ (posedge clk) begin
-	if (rst) begin
-		parity_en <= 1'b0;
-	end
-	else if (PARITY) begin
-		if (bit_ctr == 1)              parity_en <= 1'b1;
-		if (bit_ctr == DATA_WIDTH + 1) parity_en <= 1'b0;
-	end
-end
-
-
-always @ (posedge clk) begin
-	if (rst) begin
-		parity_bit <= !EVEN;
-	end
-	else if (active && PARITY) begin
-		if (psk_ctr == LATCH_TOLERANCE) parity_bit <= ( parity_en && rx_sync ) ? !parity_bit : parity_bit;
-	end
-	else parity_bit <= !EVEN;
-end
-
-// 'active' signal generation
-wire error;
-always @ (posedge clk) begin
-	if (rst) active <= 0;
-	else begin 
-		if (start) active <= 1;                // set to '1' if start condition detected
-		if (error) active <= 0;                // set to '0' in case of an error
-		if (bit_ctr == WIDTH && psk_ctr == LATCH_TOLERANCE) active <= 0; // set to '0' when rx is done
-	end
-end
-
-reg rx_negedge;
-reg rx_posedge;
-
-always @ (posedge clk) rx_posedge <= (!rx_prev && rx_sync);
-always @ (posedge clk) rx_negedge <= (rx_prev && !rx_sync);
-
-// start condition
-always @ (posedge clk) start <= (rx_prev && !rx_sync && !active);
-
-// final stage: latch data to data output reg ( checking that start, parity and stop bits are ok )
-always @ (posedge clk) begin
-	if (rst) begin
-		rxd[7:0] <= 8'h00;
-		rxv      <= 1'b0;
-	end
-	else if (
-		(bit_ctr == WIDTH+1) &&                                           // bit counter reached endpoint
-		(shiftreg[ 0 ] == 0) &&                                             // start bit was ok
-		(&shiftreg [WIDTH:WIDTH-STOP_BITS+1] == 1) &&              // all stop bits are ok
-		(PARITY ? (parity_bit == shiftreg[WIDTH-STOP_BITS]) : 1) && // parity was also ok
-		!active) begin                                               
-			rxd[7:0] <= shiftreg [8:1];
-			rxv      <= 1'b1;
-	end
-	else rxv <= 1'b0;
-end
-
-// simple prescaler counter 
-always @ (posedge clk) begin
-	if (rst) begin
-		psk_ctr <= 0;
-	end
-	else if (active) begin
-		if (( psk_ctr == PRESCALER - 1) || start) begin
-			psk_ctr <= 0;
-		end
-		else begin
-			psk_ctr <= psk_ctr + 1;
-		end
-	end
-	else psk_ctr <= 0;
-end
+  // State Machine for Receiving Data
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      state   <= IDLE;
+      val     <= 0;
+      ctr     <= 0;
+      bit_ctr <= 0;
+      dat     <= 0;
+    end
+	else begin
+      case (state)
+        IDLE: begin
+          bit_ctr <= 0;
+          ctr     <= 0;
+		      val     <= 0;
+          if (rx == 0) state <= START;
+        end
+        START: begin
+          if (ctr == SAMPLE_POINT) state <= (rx) ? IDLE : DATA;
+        end
+        DATA: begin
+          if (ctr == SAMPLE_POINT) shift_reg <= {shift_reg[DATA_BITS-2:0], rx};
+          if (ctr == BAUD_TICKS-1) begin
+            bit_ctr <= bit_ctr + 1;
+            if (bit_ctr == DATA_BITS) state <= (PARITY_MODE != 0) ? PARITY : STOP;
+          end
+        end
+        PARITY: begin
+          if (ctr == BAUD_TICKS-1) begin
+            // Calculate expected parity based on received data bits
+            par   <= (PARITY_MODE == 1) ? ~^shift_reg : ^shift_reg;
+            state <= (PARITY_MODE != 0 && par != rx) ? IDLE : STOP;
+          end
+        end
+        STOP: begin
+          if (ctr == SAMPLE_POINT) begin
+            state <= IDLE;
+            if (rx) begin
+              dat <= shift_reg;
+              val <= 1;
+			      end
+          end
+        end
+        default: state <= IDLE;
+      endcase
+      if (state != IDLE) begin
+        ctr <= (state == IDLE || ctr == BAUD_TICKS-1) ? 0 : ctr + 1;
+      end
+    end
+  end
 
 endmodule

@@ -95,8 +95,7 @@ module debug_top (
   logic cts;
 
   uart uart_inst (
-    .clk_rx    (clk),
-    .clk_tx    (clk),
+    .clk       (clk),
     .rst       (rst),
   
   	.rx        (uart_rx),
@@ -104,11 +103,10 @@ module debug_top (
   
   	.txd       (uart_txd),
   	.txv       (uart_txv),
+    .cts       (uart_cts),
   
   	.rxd       (uart_rxd),
-  	.rxv       (uart_rxv),
-    .tx_active (),
-    .rdy       (cts)
+  	.rxv       (uart_rxv)
   );
 
   logic [PHYID1_STRING_LEN+4-1:0][7:0] cur_str;

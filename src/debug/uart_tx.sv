@@ -1,102 +1,102 @@
-
-module uart_tx #
-(
-    parameter DATA_WIDTH = 8,
-    parameter STOP_BITS  = 1,
-    parameter PARITY     = 1,
-    parameter EVEN       = 1,
-    parameter PRESCALER  = 15,
-	parameter WIDTH = DATA_WIDTH + STOP_BITS + PARITY
-)
-(
-    input wire                clk,
-    input wire                rst,
-	output reg                tx,
-	input wire [DATA_WIDTH-1:0] txd,
-	input wire                txv,
-	output reg                active
+module uart_tx #(
+  parameter int   DATA_BITS   = 8,
+  parameter int   STOP_BITS   = 1,
+  parameter [1:0] PARITY_MODE = 0, // 0: None, 1: Even, 2: Odd
+  parameter int   BAUD_RATE   = 115200,
+  parameter int   CLK_FREQ    = 100000000
+) (
+  input  logic       clk,
+  input  logic       rst,
+  output logic       tx,
+  input  logic [7:0] dat,
+  input  logic       val,
+  output logic       cts
 );
-	
-reg           busy;
-reg [$clog2(PRESCALER)-1:0]     psk_ctr;
-reg [7:0]     bit_ctr;
-reg [WIDTH:0] shiftreg;
-reg           parity_bit;
-reg           parity_en;
 
-// tx is normally loaded out of a shift register, except the parity bit
+  // Calculate the number of clock cycles per bit
+  localparam integer BAUD_TICKS = CLK_FREQ / BAUD_RATE;
 
-always @ ( posedge clk ) begin
-	if ( rst ) tx <= 1'b0;
-	else tx <= PARITY ? ( active ? ( ( bit_ctr == WIDTH - STOP_BITS ) ? parity_bit : shiftreg[0] ) : 1'b1 ) : ( active ? ( shiftreg[0] ) : 1'b1 );
-end
+  // State Machine States
+  typedef enum {
+    IDLE,
+    START,
+    DATA,
+    PARITY_BIT,
+    STOP
+  } state_t;
 
-// parity is calculated for data only
-always @ ( posedge clk ) begin
-	if ( rst ) begin
-		parity_en <= 1'b0;
-	end
-	else if ( PARITY ) begin
-		if ( bit_ctr == 1 )              parity_en <= 1'b1;
-		if ( bit_ctr == DATA_WIDTH + 1 ) parity_en <= 1'b0;
-	end
-end
+  state_t state;
 
-// parity bit calculation
+  // Internal Variables
+  logic [31:0] ctr;
+  logic [5:0] bit_ctr;
+  logic [DATA_BITS-1:0] shift_reg;
+  logic par;
 
-always @ ( posedge clk ) begin
-	if ( rst ) begin
-		parity_bit <= !EVEN;
-	end
-	else if ( active && PARITY ) begin 
-		if ( psk_ctr == PRESCALER - 1 ) parity_bit <= ( parity_en && tx ) ? !parity_bit : parity_bit;
-	end
-	else parity_bit <= !EVEN;
-end
+  // Busy signal logic
+  assign cts = (state == IDLE);
 
-// shifting data out when prescaler counter reaches prescaler value
-always @ ( posedge clk ) begin
-	if ( rst ) begin
-		shiftreg <= 0;
-		bit_ctr  <= 0;
-	end
+  // State Machine for Transmitting Data
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      state   <= IDLE;
+      tx      <= 1;
+      ctr     <= 0;
+      bit_ctr <= 0;
+    end
 	else begin
-		if ( txv && !active ) begin // preload data to shiftreg
-			shiftreg[0]                              <= 1'b0; // start bit
-			shiftreg[WIDTH-STOP_BITS-PARITY:1] <= txd;
-			shiftreg[WIDTH:WIDTH-STOP_BITS+1]  <= {STOP_BITS{1'b1}};
-		end
-		if ( active && psk_ctr == PRESCALER - 1 ) begin
-			shiftreg <= shiftreg >> 1;
-			bit_ctr  <= bit_ctr + 1;
-		end
-		if ( !active ) bit_ctr <= 0; // if by some reason active state is deasserted ( EOF or error ), reset the bit counter
-	end
-end
-
-always @ ( posedge clk ) begin
-	if ( rst ) begin
-		active <= 1'b0;
-	end
-	else begin
-		if ( txv && !active ) active <= 1'b1; // start 
-		if ( bit_ctr == WIDTH && psk_ctr == PRESCALER - 1 ) active <= 1'b0; // stop
-	end
-end
-
-always @ ( posedge clk ) begin
-	if ( rst ) begin
-		psk_ctr <= 0;
-	end
-	else if ( active ) begin
-		if ( psk_ctr == PRESCALER - 1 ) begin
-			psk_ctr <= 0;
-		end
-		else begin
-			psk_ctr <= psk_ctr + 1;
-		end
-	end
-	else psk_ctr <= 0;
-end
+      case (state)
+        IDLE: begin
+          if (val) begin
+            state <= START;
+            shift_reg <= dat;
+            // Calculate parity bit if needed
+            if (PARITY_MODE == 1) begin // Even parity
+              par <= ~^dat;
+            end else if (PARITY_MODE == 2) begin // Odd parity
+              par <= ^dat;
+            end
+            ctr <= 0;
+          end
+        end
+        START: begin
+          tx <= 0; // Start bit is low
+          if (ctr == BAUD_TICKS - 1) begin
+            state <= DATA;
+            ctr <= 0;
+            bit_ctr <= 0;
+          end
+        end
+        DATA: begin
+          tx <= shift_reg[DATA_BITS-1];
+          if (ctr == BAUD_TICKS - 1) begin
+            shift_reg <= shift_reg << 1;
+            ctr <= 0;
+            bit_ctr <= bit_ctr + 1;
+            if (bit_ctr == DATA_BITS - 1) begin
+              state <= (PARITY_MODE != 0) ? PARITY_BIT : STOP;
+            end
+          end
+        end
+        PARITY_BIT: begin
+          tx <= par;
+          if (ctr == BAUD_TICKS - 1) begin
+            state <= STOP;
+            ctr <= 0;
+          end
+        end
+        STOP: begin
+          tx <= 1; // Stop bit(s) are high
+          if (ctr == BAUD_TICKS-1) begin
+            state <= IDLE;
+          end
+        end
+        default: state <= IDLE;
+      endcase
+      if (state != IDLE) begin
+        ctr <= (ctr == BAUD_TICKS-1) ? 0 : ctr + 1;
+      end
+    end
+  end
 
 endmodule
